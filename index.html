@@ -17,17 +17,17 @@
         button { background: #28a745; color: white; border: none; padding: 14px 20px; border-radius: 8px; font-size: 16px; cursor: pointer; width: 100%; font-weight: bold; transition: background 0.2s; }
         button:hover { background: #218838; }
         button:disabled { background: #ccc; cursor: not-allowed; }
-        #status { margin-top: 20px; font-weight: 600; font-size: 15px; }
-        .success { color: #28a745; }
-        .error { color: #dc3545; }
-        .process { color: #ffc107; }
+        #status { margin-top: 20px; font-weight: 600; font-size: 14px; text-align: left; background: #f8f9fa; padding: 12px; border-radius: 6px; display: none; }
+        .success { color: #28a745; border-left: 4px solid #28a745; }
+        .error { color: #dc3545; border-left: 4px solid #dc3545; }
+        .process { color: #ffc107; border-left: 4px solid #ffc107; }
     </style>
 </head>
 <body>
 
 <div class="card">
     <h1>Очистка PDF от фоновых картинок</h1>
-    <p>Загрузите файл. Картинки с разрешением 539x786 будут удалены автоматически.</p>
+    <p>Загрузите файл. Картинки с разрешением ~539x786 будут удалены автоматически.</p>
     
     <div class="file-upload">
         <span class="upload-text">Нажмите, чтобы выбрать PDF-файл</span>
@@ -41,7 +41,7 @@
 </div>
 
 <script>
-    // Показывает имя выбранного файла в интерфейсе
+    // Показывает имя выбранного файла
     function showFileName() {
         const fileInput = document.getElementById('pdf-file');
         const nameDiv = document.getElementById('file-name');
@@ -55,18 +55,15 @@
         const statusDiv = document.getElementById('status');
         const btn = document.getElementById('process-btn');
 
-        // Жестко заданные параметры под ваши критерии
-        const TARGET_WIDTH = 539;
-        const TARGET_HEIGHT = 786;
-
         if (!fileInput.files.length) {
+            statusDiv.style.display = 'block';
             statusDiv.className = 'error';
             statusDiv.innerText = 'Пожалуйста, сначала выберите PDF файл.';
             return;
         }
 
-        // Блокируем кнопку на время обработки
         btn.disabled = true;
+        statusDiv.style.display = 'block';
         statusDiv.className = 'process';
         statusDiv.innerText = 'Обработка и удаление графики...';
 
@@ -78,7 +75,10 @@
             const pages = pdfDoc.getPages();
             let removedCount = 0;
 
-            for (const page of pages) {
+            console.log("--- Начало анализа PDF ---");
+
+            for (let i = 0; i < pages.length; i++) {
+                const page = pages[i];
                 const { node } = page;
                 const resources = node.get('Resources');
                 if (!resources) continue;
@@ -90,15 +90,22 @@
                 for (const key of xObjectKeys) {
                     const xObject = xObjects.get(key);
                     
-                    // Фильтруем объекты типа /Image
                     if (xObject.get('Subtype')?.toString() === '/Image') {
                         const width = xObject.get('Width')?.value;
                         const height = xObject.get('Height')?.value;
 
-                        // Сверяем строго с вашими габаритами 539x786
-                        if (width === TARGET_WIDTH && height === TARGET_HEIGHT) {
+                        // Выводим в консоль браузера все найденные картинки для отладки
+                        console.log(`Страница ${i + 1}: Найдена картинка ${width}x${height}`);
+
+                        // Логика умной фильтрации под ваши параметры (539x786)
+                        const isExact = (width === 539 && height === 786);
+                        const isClose = (width > 500 && width < 560 && height > 750 && height < 800);
+                        const isProportional = (Math.abs((width / height) - (539 / 786)) < 0.01 && width > 100);
+
+                        if (isExact || isClose || isProportional) {
                             xObjects.delete(key);
                             removedCount++;
+                            console.log(`-> УДАЛЕНО изображение на стр. ${i + 1} (${width}x${height})`);
                         }
                     }
                 }
@@ -106,15 +113,15 @@
 
             if (removedCount === 0) {
                 statusDiv.className = 'error';
-                statusDiv.innerText = `Изображения размером ${TARGET_WIDTH}x${TARGET_HEIGHT} в файле не обнаружены.`;
+                statusDiv.innerText = `Изображения не удалены. Откройте консоль браузера (F12 -> вкладка Console), чтобы увидеть реальные размеры картинок в этом файле.`;
                 btn.disabled = false;
                 return;
             }
 
-            // Сборка нового PDF
+            // Пересборка документа
             const pdfBytes = await pdfDoc.save();
 
-            // Триггерим автоматическое скачивание очищенного файла
+            // Создание ссылки и скачивание
             const blob = new Blob([pdfBytes], { type: 'application/pdf' });
             const link = document.createElement('a');
             link.href = URL.createObjectURL(blob);
@@ -122,12 +129,12 @@
             link.click();
 
             statusDiv.className = 'success';
-            statusDiv.innerText = `Готово! Успешно удалено картинок: ${removedCount}.`;
+            statusDiv.innerText = `Готово! Успешно удалено картинок: ${removedCount}. Очищенный файл скачивается автоматически.`;
 
         } catch (error) {
             console.error(error);
             statusDiv.className = 'error';
-            statusDiv.innerText = 'Произошла критическая ошибка при чтении PDF.';
+            statusDiv.innerText = 'Произошла критическая ошибка при обработке PDF-файла.';
         } finally {
             btn.disabled = false;
         }
