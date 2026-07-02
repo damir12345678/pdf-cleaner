@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Глубокая очистка PDF</title>
+    <title>Точечная очистка PDF</title>
     <script src="https://unpkg.com/pdf-lib@1.17.1/dist/pdf-lib.min.js"></script>
     <style>
         body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; max-width: 500px; margin: 60px auto; padding: 20px; line-height: 1.6; background: #f4f6f9; }
@@ -26,8 +26,8 @@
 <body>
 
 <div class="card">
-    <h1>Глубокая очистка PDF от подложек</h1>
-    <p>Универсальное удаление фонов ~539x786 без повреждения текста.</p>
+    <h1>Точечная очистка фонов PDF</h1>
+    <p>Удаляет только подложку 539x786. Текст, линии чертежей и таблицы остаются целыми.</p>
     
     <div class="file-upload">
         <span class="upload-text">Нажмите, чтобы выбрать PDF-файл</span>
@@ -64,69 +64,75 @@
         btn.disabled = true;
         statusDiv.style.display = 'block';
         statusDiv.className = 'process';
-        statusDiv.innerText = 'Принудительное удаление графических слоев...';
+        statusDiv.innerText = 'Низкоуровневый поиск фоновых объектов...';
 
         try {
             const file = fileInput.files[0];
             const arrayBuffer = await file.arrayBuffer();
             
+            // Загружаем документ
             const pdfDoc = await PDFLib.PDFDocument.load(arrayBuffer);
-            const pages = pdfDoc.getPages();
-            let processedPagesCount = 0;
+            
+            // Получаем доступ ко всем внутренним объектам PDF напрямую (карта контекста)
+            const indirectObjects = pdfDoc.context.indirectObjects;
+            let removedCount = 0;
 
-            console.log("--- Начало глубокого рендеринга контента ---");
+            console.log("--- Глубокое сканирование карты объектов ---");
 
-            for (let i = 0; i < pages.length; i++) {
-                const page = pages[i];
-                
-                // Получаем физические размеры страницы в PDF
-                const { width, height } = page.getSize();
-                console.log(`Страница ${i + 1}: размер листа в пунктах ${width.toFixed(1)}x${height.toFixed(1)}`);
+            // Итерируемся по абсолютно всем скрытым объектам внутри PDF структуры
+            for (const [ref, object] of indirectObjects.entries()) {
+                // Ищем только объекты-словари, у которых тип подложки /Image или /Form
+                if (object instanceof PDFLib.PDFRawStream || object instanceof PDFLib.PDFStream) {
+                    const dict = object.dict;
+                    
+                    if (dict) {
+                        const widthObj = dict.get(PDFLib.PDFName.of('Width'));
+                        const heightObj = dict.get(PDFLib.PDFName.of('Height'));
 
-                // Метод 1: Очистка через манипуляцию словарем (если ресурсы скрыты глубоко)
-                const resources = page.node.get('Resources');
-                if (resources && resources.has('XObject')) {
-                    const xObjects = resources.get('XObject');
-                    for (const key of xObjects.keys()) {
-                        xObjects.delete(key); // Удаляем вообще все графические объекты на этой странице
+                        if (widthObj instanceof PDFLib.PDFNumber && heightObj instanceof PDFLib.PDFNumber) {
+                            const w = widthObj.value;
+                            const h = heightObj.value;
+
+                            // Сверяем с вашими точными физическими размерами картинки 539x786
+                            if (w === 539 && h === 786) {
+                                console.log(`Обнаружен скрытый фон: ID ${ref.objectNumber}, разрешение ${w}x${h}`);
+                                
+                                // Обнуляем данные потока (Stream). Картинка физически исчезает, 
+                                // но структура документа и текстовые слои остаются абсолютно целыми.
+                                object.contents = new Uint8Array(0); 
+                                dict.set(PDFLib.PDFName.of('Length'), PDFLib.PDFNumber.of(0));
+                                
+                                removedCount++;
+                            }
+                        }
                     }
                 }
+            }
 
-                // Метод 2: Если картинка зашита в сам поток страницы (Content Stream), 
-                // мы "смываем" фоновый слой, рисуя поверх него белый маскирующий прямоугольник 
-                // ТОЧНО под размер страницы, но ДО того, как нарисуется основной текст, 
-                // либо просто перекрываем его, если это водяной знак.
-                
-                // Рисуем маску на весь экран. Если это фоновая картинка, она исчезнет под белым фоном.
-                page.drawRectangle({
-                    x: 0,
-                    y: 0,
-                    width: width,
-                    height: height,
-                    color: PDFLib.rgb(1, 1, 1), // Чистый белый цвет
-                    opacity: 1
-                });
-
-                processedPagesCount++;
+            if (removedCount === 0) {
+                statusDiv.className = 'error';
+                statusDiv.innerText = 'Целевые подложки размером 539x786 внутри карты объектов не найдены.';
+                btn.disabled = false;
+                return;
             }
 
             // Пересборка документа
             const pdfBytes = await pdfDoc.save();
 
-            // Скачивание
+            // Автоскачивание
             const blob = new Blob([pdfBytes], { type: 'application/pdf' });
             const link = document.createElement('a');
             link.href = URL.createObjectURL(blob);
-            link.download = `cleared_fixed_${file.name}`;
+            link.download = `cleared_perfect_${file.name}`;
             link.click();
 
             statusDiv.className = 'success';
-            statusDiv.innerText = `Готово! Обработано страниц: ${processedPagesCount}. Файл успешно очищен от фонов и скачивается.`;
+            statusDiv.innerText = `Успешно! Из структуры PDF удалено объектов фонов: ${removedCount}. Текст и линии сохранены.`;
 
         } catch (error) {
             console.error(error);
             statusDiv.className = 'error';
-            statusDiv.innerText = 'Произошла ошибка. Возможно, этот тип PDF защищен от изменений.';
+            statusDiv.innerText = 'Ошибка при парсинге объектов. Возможно, файл зашифрован.';
         } finally {
             btn.disabled = false;
         }
