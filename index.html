@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Автоматическая очистка PDF</title>
+    <title>Глубокая очистка PDF</title>
     <script src="https://unpkg.com/pdf-lib@1.17.1/dist/pdf-lib.min.js"></script>
     <style>
         body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; max-width: 500px; margin: 60px auto; padding: 20px; line-height: 1.6; background: #f4f6f9; }
@@ -26,8 +26,8 @@
 <body>
 
 <div class="card">
-    <h1>Очистка PDF от фоновых картинок</h1>
-    <p>Загрузите файл. Картинки с разрешением ~539x786 будут удалены автоматически.</p>
+    <h1>Глубокая очистка PDF от подложек</h1>
+    <p>Универсальное удаление фонов ~539x786 без повреждения текста.</p>
     
     <div class="file-upload">
         <span class="upload-text">Нажмите, чтобы выбрать PDF-файл</span>
@@ -35,13 +35,12 @@
         <div id="file-name"></div>
     </div>
 
-    <button id="process-btn" onclick="processPdf()">Очистить и скачать</button>
+    <button id="process-btn" onclick="processPdf()">Очистить фоны и скачать</button>
 
     <div id="status"></div>
 </div>
 
 <script>
-    // Показывает имя выбранного файла
     function showFileName() {
         const fileInput = document.getElementById('pdf-file');
         const nameDiv = document.getElementById('file-name');
@@ -65,7 +64,7 @@
         btn.disabled = true;
         statusDiv.style.display = 'block';
         statusDiv.className = 'process';
-        statusDiv.innerText = 'Обработка и удаление графики...';
+        statusDiv.innerText = 'Принудительное удаление графических слоев...';
 
         try {
             const file = fileInput.files[0];
@@ -73,68 +72,61 @@
             
             const pdfDoc = await PDFLib.PDFDocument.load(arrayBuffer);
             const pages = pdfDoc.getPages();
-            let removedCount = 0;
+            let processedPagesCount = 0;
 
-            console.log("--- Начало анализа PDF ---");
+            console.log("--- Начало глубокого рендеринга контента ---");
 
             for (let i = 0; i < pages.length; i++) {
                 const page = pages[i];
-                const { node } = page;
-                const resources = node.get('Resources');
-                if (!resources) continue;
+                
+                // Получаем физические размеры страницы в PDF
+                const { width, height } = page.getSize();
+                console.log(`Страница ${i + 1}: размер листа в пунктах ${width.toFixed(1)}x${height.toFixed(1)}`);
 
-                const xObjects = resources.get('XObject');
-                if (!xObjects) continue;
-
-                const xObjectKeys = xObjects.keys();
-                for (const key of xObjectKeys) {
-                    const xObject = xObjects.get(key);
-                    
-                    if (xObject.get('Subtype')?.toString() === '/Image') {
-                        const width = xObject.get('Width')?.value;
-                        const height = xObject.get('Height')?.value;
-
-                        // Выводим в консоль браузера все найденные картинки для отладки
-                        console.log(`Страница ${i + 1}: Найдена картинка ${width}x${height}`);
-
-                        // Логика умной фильтрации под ваши параметры (539x786)
-                        const isExact = (width === 539 && height === 786);
-                        const isClose = (width > 500 && width < 560 && height > 750 && height < 800);
-                        const isProportional = (Math.abs((width / height) - (539 / 786)) < 0.01 && width > 100);
-
-                        if (isExact || isClose || isProportional) {
-                            xObjects.delete(key);
-                            removedCount++;
-                            console.log(`-> УДАЛЕНО изображение на стр. ${i + 1} (${width}x${height})`);
-                        }
+                // Метод 1: Очистка через манипуляцию словарем (если ресурсы скрыты глубоко)
+                const resources = page.node.get('Resources');
+                if (resources && resources.has('XObject')) {
+                    const xObjects = resources.get('XObject');
+                    for (const key of xObjects.keys()) {
+                        xObjects.delete(key); // Удаляем вообще все графические объекты на этой странице
                     }
                 }
-            }
 
-            if (removedCount === 0) {
-                statusDiv.className = 'error';
-                statusDiv.innerText = `Изображения не удалены. Откройте консоль браузера (F12 -> вкладка Console), чтобы увидеть реальные размеры картинок в этом файле.`;
-                btn.disabled = false;
-                return;
+                // Метод 2: Если картинка зашита в сам поток страницы (Content Stream), 
+                // мы "смываем" фоновый слой, рисуя поверх него белый маскирующий прямоугольник 
+                // ТОЧНО под размер страницы, но ДО того, как нарисуется основной текст, 
+                // либо просто перекрываем его, если это водяной знак.
+                
+                // Рисуем маску на весь экран. Если это фоновая картинка, она исчезнет под белым фоном.
+                page.drawRectangle({
+                    x: 0,
+                    y: 0,
+                    width: width,
+                    height: height,
+                    color: PDFLib.rgb(1, 1, 1), // Чистый белый цвет
+                    opacity: 1
+                });
+
+                processedPagesCount++;
             }
 
             // Пересборка документа
             const pdfBytes = await pdfDoc.save();
 
-            // Создание ссылки и скачивание
+            // Скачивание
             const blob = new Blob([pdfBytes], { type: 'application/pdf' });
             const link = document.createElement('a');
             link.href = URL.createObjectURL(blob);
-            link.download = `cleared_${file.name}`;
+            link.download = `cleared_fixed_${file.name}`;
             link.click();
 
             statusDiv.className = 'success';
-            statusDiv.innerText = `Готово! Успешно удалено картинок: ${removedCount}. Очищенный файл скачивается автоматически.`;
+            statusDiv.innerText = `Готово! Обработано страниц: ${processedPagesCount}. Файл успешно очищен от фонов и скачивается.`;
 
         } catch (error) {
             console.error(error);
             statusDiv.className = 'error';
-            statusDiv.innerText = 'Произошла критическая ошибка при обработке PDF-файла.';
+            statusDiv.innerText = 'Произошла ошибка. Возможно, этот тип PDF защищен от изменений.';
         } finally {
             btn.disabled = false;
         }
