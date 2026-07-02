@@ -1,0 +1,138 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Автоматическая очистка PDF</title>
+    <script src="https://unpkg.com/pdf-lib@1.17.1/dist/pdf-lib.min.js"></script>
+    <style>
+        body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; max-width: 500px; margin: 60px auto; padding: 20px; line-height: 1.6; background: #f4f6f9; }
+        .card { background: white; padding: 35px; border-radius: 16px; box-shadow: 0 10px 25px rgba(0,0,0,0.05); text-align: center; }
+        h1 { margin-top: 0; color: #222; font-size: 22px; margin-bottom: 10px; }
+        p { color: #666; font-size: 14px; margin-bottom: 25px; }
+        .file-upload { border: 2px dashed #007bff; padding: 25px; border-radius: 8px; background: #f8faff; cursor: pointer; margin-bottom: 25px; position: relative; }
+        .file-upload input { position: absolute; top: 0; left: 0; width: 100%; height: 100%; opacity: 0; cursor: pointer; }
+        .upload-text { color: #007bff; font-weight: 600; }
+        #file-name { margin-top: 8px; font-size: 13px; color: #333; font-style: italic; }
+        button { background: #28a745; color: white; border: none; padding: 14px 20px; border-radius: 8px; font-size: 16px; cursor: pointer; width: 100%; font-weight: bold; transition: background 0.2s; }
+        button:hover { background: #218838; }
+        button:disabled { background: #ccc; cursor: not-allowed; }
+        #status { margin-top: 20px; font-weight: 600; font-size: 15px; }
+        .success { color: #28a745; }
+        .error { color: #dc3545; }
+        .process { color: #ffc107; }
+    </style>
+</head>
+<body>
+
+<div class="card">
+    <h1>Очистка PDF от фоновых картинок</h1>
+    <p>Загрузите файл. Картинки с разрешением 539x786 будут удалены автоматически.</p>
+    
+    <div class="file-upload">
+        <span class="upload-text">Нажмите, чтобы выбрать PDF-файл</span>
+        <input type="file" id="pdf-file" accept=".pdf" onchange="showFileName()">
+        <div id="file-name"></div>
+    </div>
+
+    <button id="process-btn" onclick="processPdf()">Очистить и скачать</button>
+
+    <div id="status"></div>
+</div>
+
+<script>
+    // Показывает имя выбранного файла в интерфейсе
+    function showFileName() {
+        const fileInput = document.getElementById('pdf-file');
+        const nameDiv = document.getElementById('file-name');
+        if (fileInput.files.length > 0) {
+            nameDiv.innerText = `Выбран: ${fileInput.files[0].name}`;
+        }
+    }
+
+    async function processPdf() {
+        const fileInput = document.getElementById('pdf-file');
+        const statusDiv = document.getElementById('status');
+        const btn = document.getElementById('process-btn');
+
+        // Жестко заданные параметры под ваши критерии
+        const TARGET_WIDTH = 539;
+        const TARGET_HEIGHT = 786;
+
+        if (!fileInput.files.length) {
+            statusDiv.className = 'error';
+            statusDiv.innerText = 'Пожалуйста, сначала выберите PDF файл.';
+            return;
+        }
+
+        // Блокируем кнопку на время обработки
+        btn.disabled = true;
+        statusDiv.className = 'process';
+        statusDiv.innerText = 'Обработка и удаление графики...';
+
+        try {
+            const file = fileInput.files[0];
+            const arrayBuffer = await file.arrayBuffer();
+            
+            const pdfDoc = await PDFLib.PDFDocument.load(arrayBuffer);
+            const pages = pdfDoc.getPages();
+            let removedCount = 0;
+
+            for (const page of pages) {
+                const { node } = page;
+                const resources = node.get('Resources');
+                if (!resources) continue;
+
+                const xObjects = resources.get('XObject');
+                if (!xObjects) continue;
+
+                const xObjectKeys = xObjects.keys();
+                for (const key of xObjectKeys) {
+                    const xObject = xObjects.get(key);
+                    
+                    // Фильтруем объекты типа /Image
+                    if (xObject.get('Subtype')?.toString() === '/Image') {
+                        const width = xObject.get('Width')?.value;
+                        const height = xObject.get('Height')?.value;
+
+                        // Сверяем строго с вашими габаритами 539x786
+                        if (width === TARGET_WIDTH && height === TARGET_HEIGHT) {
+                            xObjects.delete(key);
+                            removedCount++;
+                        }
+                    }
+                }
+            }
+
+            if (removedCount === 0) {
+                statusDiv.className = 'error';
+                statusDiv.innerText = `Изображения размером ${TARGET_WIDTH}x${TARGET_HEIGHT} в файле не обнаружены.`;
+                btn.disabled = false;
+                return;
+            }
+
+            // Сборка нового PDF
+            const pdfBytes = await pdfDoc.save();
+
+            // Триггерим автоматическое скачивание очищенного файла
+            const blob = new Blob([pdfBytes], { type: 'application/pdf' });
+            const link = document.createElement('a');
+            link.href = URL.createObjectURL(blob);
+            link.download = `cleared_${file.name}`;
+            link.click();
+
+            statusDiv.className = 'success';
+            statusDiv.innerText = `Готово! Успешно удалено картинок: ${removedCount}.`;
+
+        } catch (error) {
+            console.error(error);
+            statusDiv.className = 'error';
+            statusDiv.innerText = 'Произошла критическая ошибка при чтении PDF.';
+        } finally {
+            btn.disabled = false;
+        }
+    }
+</script>
+
+</body>
+</html>
